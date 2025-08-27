@@ -75,6 +75,8 @@ TYPE, PUBLIC :: ControlParameters
     INTEGER(4)                          :: Z_EnableSine                 ! Enable/disable sine pitch excitation
     REAL(4)                             :: Z_PitchAmplitude             ! Amplitude of sine pitch excitation
     REAL(4)                             :: Z_PitchFrequency             ! Frequency of sine pitch excitation
+
+    CHARACTER(LEN=256)                  :: RestartFile                  ! Path to the controller restart file
     
     REAL(4)                             :: PC_RtTq99                    ! 99% of the rated torque value, using for switching between pitch and torque control, [Nm].
     REAL(4)                             :: VS_MaxOMTq                   ! Maximum torque at the end of the below-rated region 2, [Nm]
@@ -84,7 +86,7 @@ END TYPE ControlParameters
 
 TYPE, PUBLIC :: LocalVariables
     ! From avrSWAP
-    INTEGER(4)                      :: iStatus
+    INTEGER(4)                   :: iStatus
     REAL(4)                      :: Time
     REAL(4)                      :: DT
     REAL(4)                      :: VS_GenPwr
@@ -145,4 +147,33 @@ TYPE, PUBLIC :: ObjectInstances
     INTEGER(4)                          :: instNotch
     INTEGER(4)                          :: instPI
 END TYPE ObjectInstances
+
+TYPE, PUBLIC :: FilterVariables
+    REAL(4), DIMENSION(99)              :: LPFInputSignalLast        ! Input signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: LPFOutputSignalLast
+    REAL(4), DIMENSION(99)              :: SecLPFInputSignalLast1    ! Input signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: SecLPFInputSignalLast2    ! Input signal the next to last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: SecLPFOutputSignalLast1   ! Output signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: SecLPFOutputSignalLast2   ! Output signal the next to last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: HPFInputSignalLast        ! Input signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: HPFOutputSignalLast       ! Output signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFSlopesInputSignalLast1        ! Input signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFSlopesInputSignalLast2        ! Input signal the next to last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFSlopesOutputSignalLast1       ! Output signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFSlopesOutputSignalLast2       ! Output signal the next to last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFInputSignalLast1         ! Input signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFInputSignalLast2         ! Input signal the next to last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFOutputSignalLast1        ! Output signal the last time this filter was called. Supports 99 separate instances.
+    REAL(4), DIMENSION(99)              :: NFOutputSignalLast2        ! Output signal the next to last time this filter was called. Supports 99 separate instances.
+END TYPE FilterVariables
+
+TYPE, PUBLIC :: ControllerVariables
+    REAL(4), DIMENSION(99)              :: PI_ITerm = 9999.9_4        ! Integral term, current.
+    REAL(4), DIMENSION(99)              :: PI_ITermLast = 9999.9_4    ! Integral term, the last time this controller was called. Supports 99 separate instances.
+    INTEGER(4), DIMENSION(99)           :: PI_FirstCall = 1           ! First call of PI controller function
+    REAL(4), DIMENSION(99)              :: DF_errorLast = 0_4 
+    REAL(4), DIMENSION(99)              :: DF_DFControllerLast = 0_4
+    INTEGER(4), DIMENSION(99)           :: DF_FirstCall= 0
+END TYPE ControllerVariables
+
 END MODULE DRC_Types

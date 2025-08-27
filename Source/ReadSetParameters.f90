@@ -7,13 +7,26 @@ CONTAINS
     !..............................................................................................................................
     ! Read all constant control parameters from DISCON.IN parameter file
     !..............................................................................................................................
-    SUBROUTINE ReadControlParameterFileSub(CntrPar)
+    SUBROUTINE ReadControlParameterFileSub(avrSWAP, accINFILE, CntrPar)
         USE DRC_Types, ONLY : ControlParameters
 
         INTEGER(4), PARAMETER :: UnControllerParameters = 89
+        REAL(C_FLOAT), INTENT(IN)            :: avrSWAP(*)
+        CHARACTER(C_CHAR), INTENT(IN) :: accINFILE(NINT(avrSWAP(50)))        ! The name of the parameter input file
         TYPE(ControlParameters), INTENT(INOUT) :: CntrPar
+
+        CHARACTER(LEN=256) :: filename
+        INTEGER :: i
+
+        ! Initialize the filename variable
+        filename = ' '
         
-        OPEN(unit=UnControllerParameters, file='DISCON.IN', status='old', action='read')
+        ! Convert the character array to a scalar string
+        DO i = 1, MIN(LEN(filename), SIZE(accINFILE))
+            filename(i:i) = accINFILE(i)
+        END DO
+        
+        OPEN(unit=UnControllerParameters, file=TRIM(filename), status='old', action='read')
         
         !----------------------- HEADER ------------------------
         READ(UnControllerParameters, *)
@@ -132,6 +145,12 @@ CONTAINS
         READ(UnControllerParameters, *) CntrPar%FA_KI  
         READ(UnControllerParameters, *) CntrPar%FA_HPFCornerFreq
         READ(UnControllerParameters, *) CntrPar%FA_IntSat
+
+        !------------ CONTROLLER RESTART -------------------------
+        IF (avrSWAP(1) == 2) THEN
+            READ(UnControllerParameters, *)      
+            READ(UnControllerParameters, *) CntrPar%RestartFile
+        END IF
         
         ! END OF INPUT FILE    
         
@@ -341,18 +360,28 @@ CONTAINS
         ENDIF
     END SUBROUTINE Assert
     
-    SUBROUTINE SetParameters(avrSWAP, aviFAIL, ErrMsg, size_avcMSG, CntrPar, LocalVar, objInst)
-        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances
+    SUBROUTINE SetParameters(avrSWAP, accINFILE, aviFAIL, ErrMsg, size_avcMSG, CntrPar, LocalVar, objInst, FilterVar, CntrVar)
+        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances, FilterVariables, ControllerVariables
         
         INTEGER(4), INTENT(IN) :: size_avcMSG
         TYPE(ControlParameters), INTENT(INOUT) :: CntrPar
         TYPE(LocalVariables), INTENT(INOUT) :: LocalVar
         TYPE(ObjectInstances), INTENT(INOUT) :: objInst
+        TYPE(FilterVariables), INTENT(INOUT) :: FilterVar
+        TYPE(ControllerVariables), INTENT(INOUT) :: CntrVar
         
         REAL(C_FLOAT), INTENT(INOUT) :: avrSWAP(*)          ! The swap array, used to pass data to, and receive data from, the DLL controller.
+        CHARACTER(C_CHAR), INTENT(IN) :: accINFILE(NINT(avrSWAP(50)))        ! The name of the parameter input file
         INTEGER(C_INT), INTENT(OUT) :: aviFAIL              ! A flag used to indicate the success of this DLL call set as follows: 0 if the DLL call was successful, >0 if the DLL call was successful but cMessage should be issued as a warning messsage, <0 if the DLL call was unsuccessful or for any other reason the simulation is to be stopped at this point with cMessage as the error message.
         CHARACTER(size_avcMSG-1), INTENT(OUT) :: ErrMsg     ! a Fortran version of the C string argument (not considered an array here) [subtract 1 for the C null-character]
-        INTEGER(4) :: K    ! Index used for looping through blades.
+        INTEGER(4) :: K                                     ! Index used for looping through blades.
+        INTEGER(4) :: fid = 98                              ! File ID for the controller input state file
+        CHARACTER(LEN=256) :: fileName
+        CHARACTER(LEN=256) :: directoryPath
+        CHARACTER(LEN=256) :: FinalName
+        CHARACTER(LEN=5)   :: file_id
+        INTEGER(4) :: lastSlash                            ! Last occurrence of the directory separator in the filename
+        INTEGER(4) :: i                                    ! Loop index
         
         ! Set aviFAIL to 0 in each iteration:
         aviFAIL = 0
@@ -392,7 +421,7 @@ CONTAINS
                      'Visit our GitHub-page to contribute to this project:      '//NEW_LINE('A')// &
                      'https://github.com/TUDelft-DataDrivenControl              '
             
-            CALL ReadControlParameterFileSub(CntrPar)
+            CALL ReadControlParameterFileSub(avrSWAP, accINFILE, CntrPar)
             
             ! Initialize testValue (debugging variable)
             LocalVar%TestType = 0
@@ -412,7 +441,43 @@ CONTAINS
             
             ! Check validity of input parameters:
             CALL Assert(LocalVar, CntrPar, avrSWAP, aviFAIL, ErrMsg, size_avcMSG)
+
+        ELSEIF (LocalVar%iStatus == 2) THEN
             
+            CALL ReadControlParameterFileSub(avrSWAP, accINFILE, CntrPar)
+
+            ! Initialize filename and directoryPath with spaces
+            fileName = ' '
+            directoryPath = ' '
+            
+            ! Convert the character array to a scalar string
+            DO i = 1, MIN(LEN(fileName), SIZE(accINFILE))
+                fileName(i:i) = accINFILE(i)
+            END DO
+            
+            ! Find the last occurrence of the directory separator
+            lastSlash = INDEX(fileName, '/', BACK=.TRUE.)
+            IF (lastSlash == 0) THEN
+                lastSlash = INDEX(fileName, '\', BACK=.TRUE.)
+            END IF
+            
+            ! Extract the directory path
+            IF (lastSlash > 0) THEN
+                directoryPath = fileName(1:lastSlash)
+            ELSE
+                directoryPath = './' ! Default to current directory if no separator is found
+            END IF
+
+            write(file_id, '(I3.3)') NINT(avrSWAP(120))
+            write(FinalName,'(6A)')  TRIM(directoryPath), '/', TRIM(CntrPar%RestartFile), '_turb_', TRIM(file_id), '.in'
+
+            ! Read controller state input file
+            open(unit=fid, file=trim(FinalName), status='old', form='unformatted', access='stream')
+                read(fid) LocalVar, objInst, FilterVar, CntrVar
+            close(fid)      
+            
+            ! Check validity of input parameters:
+            CALL Assert(LocalVar, CntrPar, avrSWAP, aviFAIL, ErrMsg, size_avcMSG)
         ENDIF
     END SUBROUTINE SetParameters
 END MODULE ReadSetParameters

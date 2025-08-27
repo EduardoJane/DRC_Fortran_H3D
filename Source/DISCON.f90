@@ -32,32 +32,81 @@ CHARACTER(KIND=C_CHAR), INTENT(IN)      :: avcOUTNAME(NINT(avrSWAP(51)))    ! OU
 CHARACTER(KIND=C_CHAR), INTENT(INOUT)   :: avcMSG(NINT(avrSWAP(49)))        ! MESSAGE (Message from DLL to simulation code [ErrMsg])  The message which will be displayed by the calling program if aviFAIL <> 0.
 CHARACTER(SIZE(avcOUTNAME)-1)           :: RootName                         ! a Fortran version of the input C string (not considered an array here)    [subtract 1 for the C null-character]
 CHARACTER(SIZE(avcMSG)-1)               :: ErrMsg                           ! a Fortran version of the C string argument (not considered an array here) [subtract 1 for the C null-character]
+CHARACTER(LEN=256)                      :: fileName                         ! Filename for the controller input parameters file
+CHARACTER(LEN=256)                      :: directoryPath                    ! Directory path for the controller input parameters file
+CHARACTER(LEN=256)                      :: FinalName                        ! Final filename for the controller output state file
+CHARACTER(LEN=512)                      :: file_id                          ! File ID used in controller output state file name
+INTEGER(4)                              :: fid = 99                         ! File ID for the controller output state file
+INTEGER(4)                              :: lastSlash                        ! Last occurrence of the directory separator in the filename
+INTEGER(4)                              :: i                                ! Loop index
 
 TYPE(ControlParameters), SAVE         :: CntrPar
 TYPE(LocalVariables), SAVE            :: LocalVar
 TYPE(ObjectInstances), SAVE           :: objInst
+TYPE(FilterVariables), SAVE           :: FilterVar
+TYPE(ControllerVariables), SAVE       :: CntrVar
 
 !------------------------------------------------------------------------------------------------------------------------------
 ! Main control calculations
 !------------------------------------------------------------------------------------------------------------------------------
 ! Read avrSWAP array into derived types/variables
 CALL ReadAvrSWAP(avrSWAP, LocalVar)
-CALL SetParameters(avrSWAP, aviFAIL, ErrMsg, SIZE(avcMSG), CntrPar, LocalVar, objInst)
-CALL PreFilterMeasuredSignals(CntrPar, LocalVar, objInst)
 
-IF ((LocalVar%iStatus >= 0) .AND. (aviFAIL >= 0))  THEN  ! Only compute control calculations if no error has occurred and we are not on the last time step
-    CALL ComputeVariablesSetpoints(CntrPar, LocalVar)
+! Write controller state (derived types) to output file for future restart
+IF (LocalVar%iStatus == 3) THEN
+    ! Initialize filename and directoryPath with spaces
+    fileName = ' '
+    directoryPath = ' '
     
-    CALL StateMachine(CntrPar, LocalVar)
-    CALL WindSpeedEstimator(LocalVar, CntrPar)
+    ! Convert the character array to a scalar string
+    DO i = 1, MIN(LEN(filename), SIZE(accINFILE))
+        filename(i:i) = accINFILE(i)
+    END DO
     
-    CALL VariableSpeedControl(avrSWAP, CntrPar, LocalVar, objInst)
-    CALL PitchControl(avrSWAP, CntrPar, LocalVar, objInst)
-    CALL YawRateControl(avrSWAP, CntrPar, LocalVar, objInst)
+    ! Find the last occurrence of the directory separator
+    lastSlash = INDEX(fileName, '/', BACK=.TRUE.)
+    IF (lastSlash == 0) THEN
+        lastSlash = INDEX(fileName, '\', BACK=.TRUE.)
+    END IF
+    
+    ! Extract the directory path
+    IF (lastSlash > 0) THEN
+        directoryPath = fileName(1:lastSlash)
+    ELSE
+        directoryPath = './' ! Default to current directory if no separator is found
+    END IF
 
-    CALL Debug(LocalVar, CntrPar, avrSWAP, RootName, SIZE(avcOUTNAME))
+    write(file_id, '(I3.3)') NINT(avrSWAP(120))
+    
+    if (avrSWAP(121) .lt. 0.0) then
+        write(FinalName,'(4A)')  TRIM(directoryPath), 'DISCON_state_turb_', TRIM(file_id), '.in'
+    else
+        write(FinalName,'(2A,I10.10,3A)')  TRIM(directoryPath), 'DISCON_state_', NINT(avrSWAP(121)), '_turb_', TRIM(file_id), '.in'
+    end if
+
+    open(unit=fid, file=trim(FinalName), status='replace', form='unformatted', access='stream')
+        write(fid) LocalVar, objInst, FilterVar, CntrVar
+    close(fid)
+    
+    RETURN
+ELSE
+    CALL SetParameters(avrSWAP, accINFILE, aviFAIL, ErrMsg, SIZE(avcMSG), CntrPar, LocalVar, objInst, FilterVar, CntrVar)
+    CALL PreFilterMeasuredSignals(CntrPar, LocalVar, objInst, FilterVar)
+
+    IF ((LocalVar%iStatus >= 0) .AND. (aviFAIL >= 0))  THEN  ! Only compute control calculations if no error has occurred and we are not on the last time step
+        CALL ComputeVariablesSetpoints(CntrPar, LocalVar)
+        
+        CALL StateMachine(CntrPar, LocalVar)
+        CALL WindSpeedEstimator(LocalVar, CntrPar)
+        
+        CALL VariableSpeedControl(avrSWAP, CntrPar, LocalVar, objInst, CntrVar)
+        CALL PitchControl(avrSWAP, CntrPar, LocalVar, objInst, FilterVar, CntrVar)
+        CALL YawRateControl(avrSWAP, CntrPar, LocalVar, objInst, FilterVar)
+
+        CALL Debug(LocalVar, CntrPar, avrSWAP, RootName, SIZE(avcOUTNAME))
+    END IF
+
+    avcMSG = TRANSFER(TRIM(ErrMsg)//C_NULL_CHAR, avcMSG, SIZE(avcMSG))
+    RETURN
 END IF
-
-avcMSG = TRANSFER(TRIM(ErrMsg)//C_NULL_CHAR, avcMSG, SIZE(avcMSG))
-RETURN
 END SUBROUTINE DISCON

@@ -7,9 +7,9 @@ MODULE Controllers
     IMPLICIT NONE
 
 CONTAINS
-    SUBROUTINE PitchControl(avrSWAP, CntrPar, LocalVar, objInst)
+    SUBROUTINE PitchControl(avrSWAP, CntrPar, LocalVar, objInst, FilterVar, CntrVar)
     
-        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances
+        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances, FilterVariables, ControllerVariables
 
         ! Local Variables:
         REAL(C_FLOAT), INTENT(INOUT)    :: avrSWAP(*)   ! The swap array, used to pass data to, and receive data from the DLL controller.
@@ -18,6 +18,8 @@ CONTAINS
         TYPE(ControlParameters), INTENT(INOUT)  :: CntrPar
         TYPE(LocalVariables), INTENT(INOUT)     :: LocalVar
         TYPE(ObjectInstances), INTENT(INOUT)    :: objInst
+        TYPE(FilterVariables), INTENT(INOUT)    :: FilterVar
+        TYPE(ControllerVariables), INTENT(INOUT)  :: CntrVar
     
         !..............................................................................................................................
         ! Pitch control
@@ -39,21 +41,21 @@ CONTAINS
         ! Compute the pitch commands associated with the proportional and integral
         ! gains:
         IF (LocalVar%iStatus == 0) THEN
-            LocalVar%PC_PitComT = PIController(LocalVar%PC_SpdErr, LocalVar%PC_KP, LocalVar%PC_KI, CntrPar%PC_FinePit, LocalVar%PC_MaxPitVar, LocalVar%DT, LocalVar%PitCom(1), .TRUE., objInst%instPI)
+            LocalVar%PC_PitComT = PIController(LocalVar%PC_SpdErr, LocalVar%PC_KP, LocalVar%PC_KI, CntrPar%PC_FinePit, LocalVar%PC_MaxPitVar, LocalVar%DT, LocalVar%PitCom(1), .TRUE., objInst%instPI, CntrVar)
         ELSE
-            LocalVar%PC_PitComT = PIController(LocalVar%PC_SpdErr, LocalVar%PC_KP, LocalVar%PC_KI, CntrPar%PC_FinePit, LocalVar%PC_MaxPitVar, LocalVar%DT, CntrPar%PC_FinePit, .FALSE., objInst%instPI)
+            LocalVar%PC_PitComT = PIController(LocalVar%PC_SpdErr, LocalVar%PC_KP, LocalVar%PC_KI, CntrPar%PC_FinePit, LocalVar%PC_MaxPitVar, LocalVar%DT, CntrPar%PC_FinePit, .FALSE., objInst%instPI, CntrVar)
         END IF
         
         ! Individual pitch control
         IF ((CntrPar%IPC_ControlMode >= 1) .OR. (CntrPar%Y_ControlMode == 2)) THEN
-            CALL IPC(CntrPar, LocalVar, objInst)
+            CALL IPC(CntrPar, LocalVar, objInst, FilterVar, CntrVar)
         ELSE
             LocalVar%IPC_PitComF = 0.0 ! THIS IS AN ARRAY!!
         END IF
         
         ! Fore-aft tower vibration damping control
         IF ((CntrPar%FA_KI > 0.0) .OR. (CntrPar%Y_ControlMode == 2)) THEN
-            CALL ForeAftDamping(CntrPar, LocalVar, objInst)
+            CALL ForeAftDamping(CntrPar, LocalVar, objInst, CntrVar)
         ELSE
             LocalVar%FA_PitCom = 0.0 ! THIS IS AN ARRAY!!
         END IF
@@ -67,9 +69,10 @@ CONTAINS
         
         ! Combine and saturate all pitch commands:
         DO K = 1,LocalVar%NumBl ! Loop through all blades, add IPC contribution and limit pitch rate
-            ! PitCom(K) = ratelimit(LocalVar%PC_PitComT_IPC(K), LocalVar%BlPitch(K), PC_MinRat, PC_MaxRat, LocalVar%DT) ! Saturate the overall command of blade K using the pitch rate limit
+            !LocalVar%PitCom(K) = ratelimit(LocalVar%PC_PitComT_IPC(K), LocalVar%BlPitch(K), PC_MinRat, PC_MaxRat, LocalVar%DT) ! Saturate the overall command of blade K using the pitch rate limit
             LocalVar%PitCom(K) = saturate(LocalVar%PC_PitComT, CntrPar%PC_MinPit, CntrPar%PC_MaxPit)                    ! Saturate the overall command using the pitch angle limits
             LocalVar%PitCom(K) = LocalVar%PitCom(K) + LocalVar%IPC_PitComF(K) + LocalVar%FA_PitCom(K) + LocalVar%PC_SineExcitation
+            LocalVar%PitCom(K) = ratelimit(LocalVar%PitCom(K), LocalVar%BlPitch(K), CntrPar%PC_MinRat, CntrPar%PC_MaxRat, LocalVar%DT) ! Saturate the overall command of blade K using the pitch rate limit
         END DO
         
         ! Command the pitch demanded from the last
@@ -80,31 +83,32 @@ CONTAINS
         avrSWAP(45) = LocalVar%PitCom(1)    ! Use the command angle of blade 1 if using collective pitch
     END SUBROUTINE PitchControl
     
-    SUBROUTINE VariableSpeedControl(avrSWAP, CntrPar, LocalVar, objInst)
+    SUBROUTINE VariableSpeedControl(avrSWAP, CntrPar, LocalVar, objInst, CntrVar)
     
-        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances
+        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances, ControllerVariables
         
         REAL(C_FLOAT), INTENT(INOUT)            :: avrSWAP(*)    ! The swap array, used to pass data to, and receive data from, the DLL controller.
         
         TYPE(ControlParameters), INTENT(INOUT)  :: CntrPar
         TYPE(LocalVariables), INTENT(INOUT)     :: LocalVar
         TYPE(ObjectInstances), INTENT(INOUT)    :: objInst
+        TYPE(ControllerVariables), INTENT(INOUT)  :: CntrVar
         
         !..............................................................................................................................
         ! VARIABLE-SPEED TORQUE CONTROL:
         ! Compute the generator torque, which depends on which region we are in:
         !..............................................................................................................................
         IF (LocalVar%VS_State >= 4) THEN
-            LocalVar%GenArTq = PIController(LocalVar%VS_SpdErrAr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MaxOMTq, CntrPar%VS_ArSatTq, LocalVar%DT, CntrPar%VS_ArSatTq, .TRUE., objInst%instPI)
-            LocalVar%GenBrTq = PIController(LocalVar%VS_SpdErrBr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MinTq, CntrPar%VS_MinOMTq, LocalVar%DT, CntrPar%VS_MinOMTq, .TRUE., objInst%instPI)
+            LocalVar%GenArTq = PIController(LocalVar%VS_SpdErrAr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MaxOMTq, CntrPar%VS_ArSatTq, LocalVar%DT, CntrPar%VS_ArSatTq, .TRUE., objInst%instPI, CntrVar)
+            LocalVar%GenBrTq = PIController(LocalVar%VS_SpdErrBr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MinTq, CntrPar%VS_MinOMTq, LocalVar%DT, CntrPar%VS_MinOMTq, .TRUE., objInst%instPI, CntrVar)
             IF (LocalVar%VS_State == 4) THEN
                 LocalVar%GenTq = CntrPar%VS_RtTq
             ELSEIF (LocalVar%VS_State == 5) THEN
                 LocalVar%GenTq = (CntrPar%VS_RtPwr/CntrPar%VS_GenEff)/LocalVar%GenSpeedF
             END IF
         ELSE
-            LocalVar%GenArTq = PIController(LocalVar%VS_SpdErrAr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MaxOMTq, CntrPar%VS_ArSatTq, LocalVar%DT, CntrPar%VS_MaxOMTq, .FALSE., objInst%instPI)
-            LocalVar%GenBrTq = PIController(LocalVar%VS_SpdErrBr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MinTq, CntrPar%VS_MinOMTq, LocalVar%DT, CntrPar%VS_MinOMTq, .FALSE., objInst%instPI)
+            LocalVar%GenArTq = PIController(LocalVar%VS_SpdErrAr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MaxOMTq, CntrPar%VS_ArSatTq, LocalVar%DT, CntrPar%VS_MaxOMTq, .FALSE., objInst%instPI, CntrVar)
+            LocalVar%GenBrTq = PIController(LocalVar%VS_SpdErrBr, CntrPar%VS_KP(1), CntrPar%VS_KI(1), CntrPar%VS_MinTq, CntrPar%VS_MinOMTq, LocalVar%DT, CntrPar%VS_MinOMTq, .FALSE., objInst%instPI, CntrVar)
             IF (LocalVar%VS_State == 3) THEN
                 LocalVar%GenTq = LocalVar%GenArTq
             ELSEIF (LocalVar%VS_State == 1) THEN
@@ -130,15 +134,16 @@ CONTAINS
         avrSWAP(47) = LocalVar%VS_LastGenTrq   ! Demanded generator torque
     END SUBROUTINE VariableSpeedControl
     
-    SUBROUTINE YawRateControl(avrSWAP, CntrPar, LocalVar, objInst)
+    SUBROUTINE YawRateControl(avrSWAP, CntrPar, LocalVar, objInst, FilterVar)
     
-        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances
+        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances, FilterVariables
     
         REAL(C_FLOAT), INTENT(INOUT) :: avrSWAP(*) ! The swap array, used to pass data to, and receive data from, the DLL controller.
     
         TYPE(ControlParameters), INTENT(INOUT)    :: CntrPar
         TYPE(LocalVariables), INTENT(INOUT)       :: LocalVar
         TYPE(ObjectInstances), INTENT(INOUT)      :: objInst
+        TYPE(FilterVariables), INTENT(INOUT)      :: FilterVar
         
         !..............................................................................................................................
         ! Yaw control
@@ -149,8 +154,8 @@ CONTAINS
             IF (LocalVar%Time >= LocalVar%Y_YawEndT) THEN        ! Check if the turbine is currently yawing
                 avrSWAP(48) = 0.0                                ! Set yaw rate to zero
             
-                LocalVar%Y_ErrLPFFast = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPFast, LocalVar%iStatus, .FALSE., objInst%instLPF)        ! Fast low pass filtered yaw error with a frequency of 1
-                LocalVar%Y_ErrLPFSlow = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPSlow, LocalVar%iStatus, .FALSE., objInst%instLPF)        ! Slow low pass filtered yaw error with a frequency of 1/60
+                LocalVar%Y_ErrLPFFast = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPFast, LocalVar%iStatus, .FALSE., objInst%instLPF, FilterVar)        ! Fast low pass filtered yaw error with a frequency of 1
+                LocalVar%Y_ErrLPFSlow = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPSlow, LocalVar%iStatus, .FALSE., objInst%instLPF, FilterVar)        ! Slow low pass filtered yaw error with a frequency of 1/60
             
                 LocalVar%Y_AccErr = LocalVar%Y_AccErr + LocalVar%DT*SIGN(LocalVar%Y_ErrLPFFast**2, LocalVar%Y_ErrLPFFast)    ! Integral of the fast low pass filtered yaw error
             
@@ -159,21 +164,21 @@ CONTAINS
                 END IF
             ELSE
                 avrSWAP(48) = SIGN(CntrPar%Y_Rate, LocalVar%Y_MErr)        ! Set yaw rate to predefined yaw rate, the sign of the error is copied to the rate
-                LocalVar%Y_ErrLPFFast = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPFast, LocalVar%iStatus, .TRUE., objInst%instLPF)        ! Fast low pass filtered yaw error with a frequency of 1
-                LocalVar%Y_ErrLPFSlow = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPSlow, LocalVar%iStatus, .TRUE., objInst%instLPF)        ! Slow low pass filtered yaw error with a frequency of 1/60
+                LocalVar%Y_ErrLPFFast = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPFast, LocalVar%iStatus, .TRUE., objInst%instLPF, FilterVar)        ! Fast low pass filtered yaw error with a frequency of 1
+                LocalVar%Y_ErrLPFSlow = LPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_omegaLPSlow, LocalVar%iStatus, .TRUE., objInst%instLPF, FilterVar)        ! Slow low pass filtered yaw error with a frequency of 1/60
                 LocalVar%Y_AccErr = 0.0    ! "
             END IF
         END IF
     END SUBROUTINE YawRateControl
     
-    SUBROUTINE IPC(CntrPar, LocalVar, objInst)
+    SUBROUTINE IPC(CntrPar, LocalVar, objInst, FilterVar, CntrVar)
         !-------------------------------------------------------------------------------------------------------------------------------
         ! Individual pitch control subroutine
         ! Calculates the commanded pitch angles for IPC employed for blade fatigue load reductions at 1P and 2P
         !
         ! Variable declaration and initialization
         !------------------------------------------------------------------------------------------------------------------------------
-        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances
+        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances, FilterVariables, ControllerVariables
         
         ! Local variables
         REAL(4)                  :: PitComIPC(3), PitComIPCF(3), PitComIPC_1P(3), PitComIPC_2P(3)
@@ -188,6 +193,8 @@ CONTAINS
         TYPE(ControlParameters), INTENT(INOUT)  :: CntrPar
         TYPE(LocalVariables), INTENT(INOUT)     :: LocalVar
         TYPE(ObjectInstances), INTENT(INOUT)    :: objInst
+        TYPE(FilterVariables), INTENT(INOUT)    :: FilterVar
+        TYPE(ControllerVariables), INTENT(INOUT)  :: CntrVar
         
         ! Body
         ! Initialization
@@ -205,8 +212,8 @@ CONTAINS
         
         ! High-pass filter the MBC yaw component and filter yaw alignment error, and compute the yaw-by-IPC contribution
         IF (CntrPar%Y_ControlMode == 2) THEN
-            Y_MErrF = SecLPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_IPC_omegaLP, CntrPar%Y_IPC_zetaLP, LocalVar%iStatus, .FALSE., objInst%instSecLPF)
-            Y_MErrF_IPC = PIController(Y_MErrF, CntrPar%Y_IPC_KP(1), CntrPar%Y_IPC_KI(1), -CntrPar%Y_IPC_IntSat, CntrPar%Y_IPC_IntSat, LocalVar%DT, 0.0, .FALSE., objInst%instPI)
+            Y_MErrF = SecLPFilter(LocalVar%Y_MErr, LocalVar%DT, CntrPar%Y_IPC_omegaLP, CntrPar%Y_IPC_zetaLP, LocalVar%iStatus, .FALSE., objInst%instSecLPF, FilterVar)
+            Y_MErrF_IPC = PIController(Y_MErrF, CntrPar%Y_IPC_KP(1), CntrPar%Y_IPC_KI(1), -CntrPar%Y_IPC_IntSat, CntrPar%Y_IPC_IntSat, LocalVar%DT, 0.0, .FALSE., objInst%instPI, CntrVar)
         ELSE
             axisYawF_1P = axisYaw_1P
             Y_MErrF = 0.0
@@ -246,7 +253,7 @@ CONTAINS
             
             ! Optionally filter the resulting signal to induce a phase delay
             IF (CntrPar%IPC_CornerFreqAct > 0.0) THEN
-                PitComIPCF(K) = LPFilter(PitComIPC(K), LocalVar%DT, CntrPar%IPC_CornerFreqAct, LocalVar%iStatus, .FALSE., objInst%instLPF)
+                PitComIPCF(K) = LPFilter(PitComIPC(K), LocalVar%DT, CntrPar%IPC_CornerFreqAct, LocalVar%iStatus, .FALSE., objInst%instLPF, FilterVar)
             ELSE
                 PitComIPCF(K) = PitComIPC(K)
             END IF
@@ -255,13 +262,13 @@ CONTAINS
         END DO
     END SUBROUTINE IPC
     
-    SUBROUTINE ForeAftDamping(CntrPar, LocalVar, objInst)
+    SUBROUTINE ForeAftDamping(CntrPar, LocalVar, objInst, CntrVar)
         !-------------------------------------------------------------------------------------------------------------------------------
         ! Fore-aft damping controller, reducing the tower fore-aft vibrations using pitch
         !
         ! Variable declaration and initialization
         !------------------------------------------------------------------------------------------------------------------------------
-        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances
+        USE DRC_Types, ONLY : ControlParameters, LocalVariables, ObjectInstances, ControllerVariables
         
         ! Local variables
         INTEGER(4) :: K    ! Integer used to loop through turbine blades
@@ -269,9 +276,10 @@ CONTAINS
         TYPE(ControlParameters), INTENT(INOUT)  :: CntrPar
         TYPE(LocalVariables), INTENT(INOUT)     :: LocalVar
         TYPE(ObjectInstances), INTENT(INOUT)    :: objInst
+        TYPE(ControllerVariables), INTENT(INOUT)  :: CntrVar
         
         ! Body
-        LocalVar%FA_AccHPFI = PIController(LocalVar%FA_AccHPF, 0.0, CntrPar%FA_KI, -CntrPar%FA_IntSat, CntrPar%FA_IntSat, LocalVar%DT, 0.0, .FALSE., objInst%instPI)
+        LocalVar%FA_AccHPFI = PIController(LocalVar%FA_AccHPF, 0.0, CntrPar%FA_KI, -CntrPar%FA_IntSat, CntrPar%FA_IntSat, LocalVar%DT, 0.0, .FALSE., objInst%instPI, CntrVar)
         
         ! Store the fore-aft pitch contribution to LocalVar data type
         DO K = 1,LocalVar%NumBl

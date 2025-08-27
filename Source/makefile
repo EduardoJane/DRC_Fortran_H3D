@@ -23,6 +23,8 @@ SOURCE_FILE = Constants.f90 DRC_Types.f90 Functions.f90 Filters.f90 ReadSetParam
    # Name of compiler to use and flags to use.
 FC      = gfortran
 FFLAGS  = -O2 -m$(BITS) -fbacktrace -ffree-line-length-none -x f95-cpp-input -C
+#FC      = ifort
+#FFLAGS  = -cpp -Ofast -msse4.2 -axAVX,CORE-AVX2 -assume bscc -D_has_Quad -fp-model=fast=2 -ipo
 LDFLAGS = -shared -O2 -m$(BITS) -fbacktrace
 
 # other useful gfortran options:

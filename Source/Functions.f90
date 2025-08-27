@@ -41,8 +41,9 @@ CONTAINS
     END FUNCTION ratelimit
     !-------------------------------------------------------------------------------------------------------------------------------
     ! PI controller, with output saturation
-    REAL FUNCTION PIController(error, kp, ki, minValue, maxValue, DT, I0, reset, inst)
+    REAL FUNCTION PIController(error, kp, ki, minValue, maxValue, DT, I0, reset, inst, CntrVar)
     !
+        USE DRC_Types, ONLY: ControllerVariables
         IMPLICIT NONE
 
         ! Inputs
@@ -55,29 +56,30 @@ CONTAINS
         INTEGER(4), INTENT(INOUT)   :: inst
         REAL(4), INTENT(IN)         :: I0
         LOGICAL, INTENT(IN)         :: reset
+        TYPE(ControllerVariables), INTENT(INOUT) :: CntrVar
         
         ! Local
         INTEGER(4)                      :: i                                            ! Counter for making arrays
         REAL(4)                         :: PTerm                                        ! Proportional term
-        REAL(4), DIMENSION(99), SAVE    :: ITerm = (/ (real(9999.9), i = 1,99) /)       ! Integral term, current.
-        REAL(4), DIMENSION(99), SAVE    :: ITermLast = (/ (real(9999.9), i = 1,99) /)   ! Integral term, the last time this controller was called. Supports 99 separate instances.
-        INTEGER(4), DIMENSION(99), SAVE :: FirstCall = (/ (1, i=1,99) /)                ! First call of this function?
+        ! REAL(4), DIMENSION(99), SAVE    :: ITerm = (/ (real(9999.9), i = 1,99) /)       ! Integral term, current.
+        ! REAL(4), DIMENSION(99), SAVE    :: ITermLast = (/ (real(9999.9), i = 1,99) /)   ! Integral term, the last time this controller was called. Supports 99 separate instances.
+        ! INTEGER(4), DIMENSION(99), SAVE :: FirstCall = (/ (1, i=1,99) /)                ! First call of this function?
         
         ! Initialize persistent variables/arrays, and set inital condition for integrator term
-        IF ((FirstCall(inst) == 1) .OR. reset) THEN
-            ITerm(inst) = I0
-            ITermLast(inst) = I0
+        IF ((CntrVar%PI_FirstCall(inst) == 1) .OR. reset) THEN
+            CntrVar%PI_ITerm(inst) = I0
+            CntrVar%PI_ITermLast(inst) = I0
             
-            FirstCall(inst) = 0
+            CntrVar%PI_FirstCall(inst) = 0
             PIController = I0
         ELSE
             PTerm = kp*error
-            ITerm(inst) = ITerm(inst) + DT*ki*error
-            ITerm(inst) = saturate(ITerm(inst), minValue, maxValue)
-            PIController = PTerm + ITerm(inst)
+            CntrVar%PI_ITerm(inst) = CntrVar%PI_ITerm(inst) + DT*ki*error
+            CntrVar%PI_ITerm(inst) = saturate(CntrVar%PI_ITerm(inst), minValue, maxValue)
+            PIController = PTerm + CntrVar%PI_ITerm(inst)
             PIController = saturate(PIController, minValue, maxValue)
         
-            ITermLast(inst) = ITerm(inst)
+            CntrVar%PI_ITermLast(inst) = CntrVar%PI_ITerm(inst)
         END IF
         inst = inst + 1
         
@@ -111,8 +113,9 @@ CONTAINS
     END FUNCTION interp1d
     !-------------------------------------------------------------------------------------------------------------------------------
     ! DF controller, with output saturation
-    REAL FUNCTION DFController(error, Kd, Tf, DT, inst)
+    REAL FUNCTION DFController(error, Kd, Tf, DT, inst, CntrVar)
     !
+        USE DRC_Types, ONLY: ControllerVariables
         IMPLICIT NONE
 
             ! Inputs
@@ -121,24 +124,25 @@ CONTAINS
         REAL(4), INTENT(IN)     :: tf
         REAL(4), INTENT(IN)     :: DT
         INTEGER(4), INTENT(IN)  :: inst
+        TYPE(ControllerVariables), INTENT(INOUT) :: CntrVar
         
             ! Local
         REAL(4)                         :: B                                    ! 
         INTEGER(4)                      :: i                                    ! Counter for making arrays
-        REAL(4), DIMENSION(99), SAVE    :: errorLast = (/ (0, i=1,99) /)        ! 
-        REAL(4), DIMENSION(99), SAVE    :: DFControllerLast = (/ (0, i=1,99) /) ! 
-        INTEGER(4), DIMENSION(99), SAVE :: FirstCall = (/ (1, i=1,99) /)        ! First call of this function?
+        ! REAL(4), DIMENSION(99), SAVE    :: errorLast = (/ (0, i=1,99) /)        ! 
+        ! REAL(4), DIMENSION(99), SAVE    :: DFControllerLast = (/ (0, i=1,99) /) ! 
+        ! INTEGER(4), DIMENSION(99), SAVE :: FirstCall = (/ (1, i=1,99) /)        ! First call of this function?
         
-            ! Initialize persistent variables/arrays, and set inital condition for integrator term
-        ! IF (FirstCall(inst) == 1) THEN
-            ! FirstCall(inst) = 0
-        ! END IF
+        ! Initialize persistent variables/arrays, and set inital condition for integrator term
+        IF (CntrVar%DF_FirstCall(inst) == 1) THEN
+            CntrVar%DF_FirstCall(inst) = 0
+        END IF
         
         B = 2.0/DT
-        DFController = (Kd*B)/(B*Tf+1.0)*error - (Kd*B)/(B*Tf+1.0)*errorLast(inst) - (1.0-B*Tf)/(B*Tf+1.0)*DFControllerLast(inst)
+        DFController = (Kd*B)/(B*Tf+1.0)*error - (Kd*B)/(B*Tf+1.0)*CntrVar%DF_errorLast(inst) - (1.0-B*Tf)/(B*Tf+1.0)*CntrVar%DF_DFControllerLast(inst)
 
-        errorLast(inst) = error
-        DFControllerLast(inst) = DFController
+        CntrVar%DF_errorLast(inst) = error
+        CntrVar%DF_DFControllerLast(inst) = DFController
     END FUNCTION DFController
     !-------------------------------------------------------------------------------------------------------------------------------
     ! State machines, determines the state of the wind turbine to determine the corresponding control actions
