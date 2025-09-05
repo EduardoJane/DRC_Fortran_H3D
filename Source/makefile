@@ -19,12 +19,78 @@ DLL_DIR     = .
 
 SOURCE_FILE = Constants.f90 DRC_Types.f90 Functions.f90 Filters.f90 ReadSetParameters.f90 Controllers.f90 DISCON.f90
 
+########################################
+## User defined compilation flags 
+########################################
+GNU_HPC_FLAGS= -cpp -fallow-argument-mismatch -std=legacy -ffree-line-length-0 -O3 -ftree-vectorize \
+		   -ftree-vectorizer-verbose=0 -fbackslash -D_has_Quad -march=znver3 -funroll-loops
+GNU_RELEASE_FLAGS= -cpp -ffree-line-length-0 -O3 -ftree-vectorize  -ftree-vectorizer-verbose=0 \
+		   -fbackslash -D_has_Quad
+GNU_DEBUG_FLAGS=  -ffree-line-length-0 -cpp -O0 -g -fcheck=all -Wno-unused-variable \
+		  -fbacktrace -fbounds-check -finit-real=snan -Wall \
+		  -ffpe-trap=invalid,zero,overflow -fcheck-array-temporaries \
+		  -fbackslash -fcheck=pointer -D_has_Quad
+INTEL_HPC_FLAGS= -cpp -Ofast -msse4.2 -axAVX,CORE-AVX2 -assume bscc -D_has_Quad  -fp-model=fast=2 -ipo
+INTEL_RELEASE_FLAGS= -cpp -O3 -assume bscc -D_has_Quad -fp-model precise
+INTEL_DEBUG_FLAGS= -cpp -O0 -g -warn all -fpscomp logicals -traceback \
+		   -check bounds -check uninit -ftrapuv -debug all \
+		   -ftrace=full -ftz -fp-model precise \
+		   -fp-speculation=off -assume bscc -D_has_Quad
 
-   # Name of compiler to use and flags to use.
-FC      = gfortran
-FFLAGS  = -O2 -m$(BITS) -fbacktrace -ffree-line-length-none -x f95-cpp-input -C
-#FC      = ifort
-#FFLAGS  = -cpp -Ofast -msse4.2 -axAVX,CORE-AVX2 -assume bscc -D_has_Quad -fp-model=fast=2 -ipo
+##########################################
+## Select compiler 
+##########################################
+ifeq ($(COMPILER),gfortran)
+  FC:=gfortran
+else ifeq ($(COMPILER),gnu)
+  FC:=gfortran
+else ifeq ($(COMPILER),GNU)
+  FC:=gfortran
+else ifeq ($(COMPILER),ifort)
+  FC:=ifort
+else ifeq ($(COMPILER),intel)
+  FC:=ifort
+else ifeq ($(COMPILER),INTEL)
+  FC:=ifort
+else
+   ifneq ($(MAKECMDGOALS),clean)
+      $(info COMPILER value unspecified or not recognised. Using default gfortran)
+   endif
+   FC:=gfortran
+endif
+
+##########################################
+## Select mode
+##########################################
+ifeq ($(MODE),RELEASE)
+     ifeq ($(FC),gfortran)
+         FFLAGS=$(GNU_RELEASE_FLAGS)
+     else ifeq ($(FC),ifort)
+         FFLAGS=$(INTEL_RELEASE_FLAGS)
+     endif
+else ifeq ($(MODE),HPC)
+     ifeq ($(FC),gfortran)
+         FFLAGS=$(GNU_HPC_FLAGS)
+     else ifeq ($(FC),ifort)
+         FFLAGS=$(INTEL_HPC_FLAGS)
+     endif	 
+else ifeq ($(MODE),DEBUG)
+     ifeq ($(FC),gfortran)
+         FFLAGS=$(GNU_DEBUG_FLAGS)
+     else ifeq ($(FC),ifort)
+         FFLAGS=$(INTEL_DEBUG_FLAGS)
+     endif
+else
+   ifneq ($(MAKECMDGOALS),clean)
+      $(info MODE argument unspecified or not recognised. Using RELEASE compiler flags)
+   endif
+   ifeq ($(FC),gfortran)
+       FFLAGS=$(GNU_RELEASE_FLAGS)
+   else ifeq ($(FC),ifort)
+       FFLAGS=$(INTEL_RELEASE_FLAGS)
+   endif
+endif
+
 LDFLAGS = -shared -O2 -m$(BITS) -fbacktrace
 
 # other useful gfortran options:
